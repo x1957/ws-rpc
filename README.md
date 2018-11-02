@@ -1,2 +1,5 @@
 # ws-rpc
-simple webosocket rpc
+
+WIP
+
+very simple webosocket rpc
