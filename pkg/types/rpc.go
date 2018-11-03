@@ -1,8 +1,10 @@
 package types
 
+import "encoding/json"
+
 type Request struct {
-	Method string `json:"method"`
-	Args   []byte `json:"args,omitempty"`
+	Method string          `json:"method"`
+	Args   json.RawMessage `json:"args,omitempty"` // TODO consider other proto
 }
 
 type Response struct {
