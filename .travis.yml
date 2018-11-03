@@ -1,0 +1,16 @@
+language: go
+sudo: false
+go:
+  - 1.11.x
+go_import_path: github.com/x1957/ws-rpc
+
+cache:
+  directories:
+    - vendor
+
+
+install:
+  - glide install
+
+script:
+  - go list ./...  | grep -v vendor | xargs go test
