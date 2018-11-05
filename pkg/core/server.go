@@ -122,13 +122,15 @@ func (s *WSServer) read(conn *WsConn) {
 				return
 			}
 
-			s.gpool.run(func() {
+			if err := s.gpool.run(func() {
 				// run in goroutine pool
 				if err := s.handleRequest(conn, bs); err != nil {
 					// TODO Write error
 					s.error(conn, err)
 				}
-			})
+			}); err != nil {
+				s.error(conn, err)
+			}
 		}
 	}
 
