@@ -1,6 +1,7 @@
 package core
 
 import (
+	"github.com/golang/glog"
 	"sync"
 	"time"
 )
@@ -58,7 +59,16 @@ func (gpool *gpool) runFunc() {
 			return
 		case worker := <-gpool.workerQueue:
 			// TODO calc the time in queue
-			worker.f()
+			runWorker(worker)
 		}
 	}
+}
+
+func runWorker(worker worker) {
+	defer func() {
+		if x := recover(); x != nil {
+			glog.Errorf("run func error. %v", x)
+		}
+	}()
+	worker.f()
 }
