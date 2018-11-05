@@ -148,29 +148,47 @@ func (s *WSServer) handleRequest(conn *WsConn, req []byte) error {
 	if !ok {
 		return &HandlerNotExistError{methodName + " method not found."}
 	}
-	methodFunc := f.(reflect.Value)
+	ht := f.(handlerType)
+	methodFunc := ht.method
 	argTyp := methodFunc.Type().In(1) // arg
 	arg := reflect.New(argTyp).Interface()
 	if err := s.proto.Unmarshal(request.Args, arg); err != nil {
 		return err
 	}
 	output := methodFunc.Call([]reflect.Value{reflect.ValueOf(conn.Ctx), reflect.ValueOf(arg).Elem()})
-	if output[1].IsNil() {
-		result := output[0].Interface()
-		bs, err := s.proto.Marshal(result)
-		if err != nil {
+
+	if ht.methodType == Normal {
+		if output[1].IsNil() {
+			// output
+			// TODO response pool
+			var resp types.Response
+			resp.Status = 0
+			resp.ClientId = request.ClientId
+			bs, err := s.proto.Marshal(output[0].Interface())
+
+			if err != nil {
+				// error
+				return err
+			}
+			resp.Data = bs
+			respBs, err := s.proto.Marshal(resp)
+			if err != nil {
+				return err
+			}
+			conn.Write(respBs)
+		} else {
 			// error
-			s.error(conn, err)
 		}
-		conn.Write(bs)
-	} else {
-		// error
+	} else if ht.methodType == Stream {
+		if !output[0].IsNil() {
+			// error
+		}
 	}
 	return nil
 }
 
 func (s *WSServer) error(conn *WsConn, err error) {
-	glog.Errorf("error: %v", err)
+	glog.Errorf("%s error: %v", conn.conn.RemoteAddr(), err)
 }
 
 func (conn *WsConn) Write(data []byte) error {

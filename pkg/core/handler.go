@@ -5,6 +5,16 @@ import (
 	"reflect"
 )
 
+const (
+	Normal = 1
+	Stream = 2
+)
+
+type handlerType struct {
+	method     reflect.Value
+	methodType int
+}
+
 func (s *WSServer) Handle(name string, handler interface{}) {
 	t := reflect.TypeOf(handler)
 	if t.Kind() != reflect.Func {
@@ -27,17 +37,20 @@ func (s *WSServer) Handle(name string, handler interface{}) {
 	}
 
 	var output reflect.Type
+	var methodType int
 	if t.NumOut() == 1 {
 		output = t.Out(0)
+		methodType = Stream
 	} else {
 		output = t.Out(1)
+		methodType = Normal
 	}
 	// check output, error
 	if !isImpl(output, reflect.TypeOf((*error)(nil)).Elem()) {
 		panic("The second output must a type of error.")
 	}
 
-	_, loaded := s.handlers.LoadOrStore(name, reflect.ValueOf(handler))
+	_, loaded := s.handlers.LoadOrStore(name, handlerType{reflect.ValueOf(handler), methodType})
 	if loaded {
 		panic("method " + name + " already exists.")
 	}
@@ -59,12 +72,4 @@ type HandlerNotExistError struct {
 
 func (e *HandlerNotExistError) Error() string {
 	return e.method + " handler not exists."
-}
-
-func (s *WSServer) getHandler(method string) (reflect.Value, error) {
-	handler, ok := s.handlers.Load(method)
-	if !ok {
-		return reflect.Value{}, &HandlerNotExistError{method}
-	}
-	return handler.(reflect.Value), nil
 }
