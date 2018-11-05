@@ -1,13 +1,12 @@
 package core
 
 import (
-	"github.com/golang/glog"
-	"sync"
 	"time"
+
+	"github.com/golang/glog"
 )
 
 type gpool struct {
-	sync.Mutex
 	size        int
 	limit       int
 	stop        chan struct{}
