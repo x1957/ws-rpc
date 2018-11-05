@@ -35,6 +35,7 @@ type WSServer struct {
 	ip       string
 	path     string
 	handlers sync.Map
+	gpool    *gpool
 }
 
 type WSOpts struct {
@@ -44,9 +45,9 @@ type WSOpts struct {
 	Path  string
 }
 
-type wsConn struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
+type WsConn struct {
+	Ctx     context.Context
+	Cancel  context.CancelFunc
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 	// only one goroutine read, no lock needed
@@ -67,6 +68,7 @@ func NewWSServer(opts WSOpts) *WSServer {
 		port:  opts.Port,
 		ip:    opts.IP,
 		path:  opts.Path,
+		gpool: newGpool(4096), // TODO config
 	}
 }
 
@@ -88,28 +90,30 @@ func (s *WSServer) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	wsConn := &wsConn{
-		conn:   conn,
-		ctx:    ctx,
-		cancel: cancel,
+	wsConn := &WsConn{
+		conn: conn,
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, "context", wsConn) // *WsConn
+	wsConn.Ctx = ctx
+	wsConn.Cancel = cancel
 	glog.Infof("%s connected.", r.RemoteAddr)
 	go s.read(wsConn)
 }
 
-func (s *WSServer) read(conn *wsConn) {
+func (s *WSServer) read(conn *WsConn) {
 	// dispatcher
 	// TODO handler heartbeat
 	// sevver ping client
 	defer func() {
-		conn.cancel()
+		conn.Cancel()
 		conn.conn.Close()
 		glog.Infof("connecton %s closed.", conn.conn.RemoteAddr())
 	}()
 	for {
 		select {
-		case <-conn.ctx.Done():
+		case <-conn.Ctx.Done():
 			return
 		default:
 			conn.conn.SetReadDeadline(time.Now().Add(ReadTimeout))
@@ -117,16 +121,20 @@ func (s *WSServer) read(conn *wsConn) {
 			if err != nil {
 				return
 			}
-			if err := s.handleRequest(conn, bs); err != nil {
-				// TODO write error
-				s.error(conn, err)
-			}
+
+			s.gpool.run(func() {
+				// run in goroutine pool
+				if err := s.handleRequest(conn, bs); err != nil {
+					// TODO Write error
+					s.error(conn, err)
+				}
+			})
 		}
 	}
 
 }
 
-func (s *WSServer) handleRequest(conn *wsConn, req []byte) error {
+func (s *WSServer) handleRequest(conn *WsConn, req []byte) error {
 	var request types.Request
 	if err := s.proto.Unmarshal(req, &request); err != nil {
 		return err
@@ -143,7 +151,7 @@ func (s *WSServer) handleRequest(conn *wsConn, req []byte) error {
 	if err := s.proto.Unmarshal(request.Args, arg); err != nil {
 		return err
 	}
-	output := methodFunc.Call([]reflect.Value{reflect.ValueOf(conn.ctx), reflect.ValueOf(arg).Elem()})
+	output := methodFunc.Call([]reflect.Value{reflect.ValueOf(conn.Ctx), reflect.ValueOf(arg).Elem()})
 	if output[1].IsNil() {
 		result := output[0].Interface()
 		bs, err := s.proto.Marshal(result)
@@ -151,18 +159,18 @@ func (s *WSServer) handleRequest(conn *wsConn, req []byte) error {
 			// error
 			s.error(conn, err)
 		}
-		s.write(conn, bs)
+		conn.Write(bs)
 	} else {
 		// error
 	}
 	return nil
 }
 
-func (s *WSServer) error(conn *wsConn, err error) {
+func (s *WSServer) error(conn *WsConn, err error) {
 	glog.Errorf("error: %v", err)
 }
 
-func (s *WSServer) write(conn *wsConn, data []byte) error {
+func (conn *WsConn) Write(data []byte) error {
 	conn.writeMu.Lock()
 	conn.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	if err := conn.conn.WriteMessage(websocket.TextMessage, data); err != nil {
