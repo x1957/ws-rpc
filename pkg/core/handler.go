@@ -11,7 +11,7 @@ func (s *WSServer) Handle(name string, handler interface{}) {
 		panic("error: " + name + " method type not func.")
 	}
 
-	if t.NumIn() != 2 || t.NumOut() != 2 {
+	if t.NumIn() != 2 || !(t.NumOut() == 1 || t.NumOut() == 2) {
 		panic("error: handler wants 2 input and 2 output parameters.")
 	}
 
@@ -26,9 +26,14 @@ func (s *WSServer) Handle(name string, handler interface{}) {
 		panic("The second arg must a type of struct.")
 	}
 
+	var output reflect.Type
+	if t.NumOut() == 1 {
+		output = t.Out(0)
+	} else {
+		output = t.Out(1)
+	}
 	// check output, error
-	output2 := t.Out(1)
-	if !isImpl(output2, reflect.TypeOf((*error)(nil)).Elem()) {
+	if !isImpl(output, reflect.TypeOf((*error)(nil)).Elem()) {
 		panic("The second output must a type of error.")
 	}
 
