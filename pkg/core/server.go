@@ -18,6 +18,7 @@ const (
 	ReadTimeout   = 30 * time.Second      // heartbeat 10s TODO config
 	WriteTimeout  = 50 * time.Millisecond // TODO config
 	HeartBeatTime = 10 * time.Second
+	ConnKey       = "WSConn"
 )
 
 var upgrader = websocket.Upgrader{
@@ -95,7 +96,7 @@ func (s *WSServer) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = context.WithValue(ctx, "context", wsConn) // *WsConn
+	ctx = context.WithValue(ctx, ConnKey, wsConn) // *WsConn
 	wsConn.Ctx = ctx
 	wsConn.Cancel = cancel
 	glog.Infof("%s connected.", r.RemoteAddr)

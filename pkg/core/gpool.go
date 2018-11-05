@@ -44,7 +44,7 @@ func (gpool *gpool) run(f func()) error {
 	select {
 	case gpool.workerQueue <- worker:
 		//do nothing
-	case time.After(2 * time.Second):
+	case <-time.After(2 * time.Second):
 		return &poolBlockError{}
 	}
 	return nil
