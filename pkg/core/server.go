@@ -8,10 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/golang/glog"
 	"github.com/gorilla/websocket"
 	"github.com/x1957/ws-rpc/pkg/proto"
 	"github.com/x1957/ws-rpc/pkg/types"
+	"github.com/x1957/ws-rpc/pkg/util"
 )
 
 const (
@@ -47,10 +50,13 @@ type WSOpts struct {
 }
 
 type WsConn struct {
-	Ctx     context.Context
-	Cancel  context.CancelFunc
-	conn    *websocket.Conn
-	writeMu sync.Mutex
+	Ctx      context.Context
+	Cancel   context.CancelFunc
+	conn     *websocket.Conn
+	writeMu  sync.Mutex
+	proto    proto.Proto
+	lastPong int64
+	lastPing int64
 	// only one goroutine read, no lock needed
 }
 
@@ -92,7 +98,8 @@ func (s *WSServer) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wsConn := &WsConn{
-		conn: conn,
+		conn:  conn,
+		proto: s.proto,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,14 +111,16 @@ func (s *WSServer) serveWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WSServer) read(conn *WsConn) {
-	// dispatcher
-	// TODO handler heartbeat
-	// sevver ping client
 	defer func() {
 		conn.Cancel()
 		conn.conn.Close()
 		glog.Infof("connecton %s closed.", conn.conn.RemoteAddr())
 	}()
+	// TODO handle ping here
+	s.gpool.run(func() {
+		conn.heartbeat()
+	})
+
 	for {
 		select {
 		case <-conn.Ctx.Done():
@@ -142,6 +151,14 @@ func (s *WSServer) handleRequest(conn *WsConn, req []byte) error {
 	if err := s.proto.Unmarshal(req, &request); err != nil {
 		return err
 	}
+	if request.Method == "pong" {
+		var pong types.PingPong
+		if err := s.proto.Unmarshal(request.Args, &pong); err != nil {
+			return &types.UnKnownPongMessage{}
+		}
+		atomic.StoreInt64(&conn.lastPong, pong.Ts)
+		return nil
+	}
 	methodName := request.Method
 
 	f, ok := s.handlers.Load(methodName)
@@ -171,6 +188,7 @@ func (s *WSServer) handleRequest(conn *WsConn, req []byte) error {
 				return err
 			}
 			resp.Data = bs
+			resp.Method = request.Method
 			respBs, err := s.proto.Marshal(resp)
 			if err != nil {
 				return err
@@ -200,4 +218,49 @@ func (conn *WsConn) Write(data []byte) error {
 	}
 	conn.writeMu.Unlock()
 	return nil
+}
+
+func (conn *WsConn) WriteObj(data interface{}) error {
+	bs, err := conn.proto.Marshal(data)
+	if err != nil {
+		return err
+	}
+	return conn.Write(bs)
+}
+
+func (conn *WsConn) heartbeat() {
+	// send heart beat
+	tick := time.NewTicker(HeartBeatTime)
+	var ping types.Response
+	ping.Method = "ping"
+	ping.Status = 0
+	var ts types.PingPong
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			// check last pong
+			lastPong := atomic.LoadInt64(&conn.lastPong)
+			ts.Ts = util.Timestamp()
+			if (lastPong > 0 && ts.Ts-lastPong > 20*1000) || (conn.lastPing > 0 && conn.lastPong == 0) {
+				glog.Errorf("Do not recv pong meesage, close client: %s", conn.conn.RemoteAddr().String())
+				conn.writeMu.Lock()
+				conn.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				conn.writeMu.Unlock()
+				conn.Cancel()
+				return
+			}
+			// send ping
+			pingData, _ := conn.proto.Marshal(ts)
+			ping.Data = pingData
+			if err := conn.WriteObj(ping); err != nil {
+				glog.Errorf("Write ping message for %s error. %v", conn.conn.RemoteAddr(), err)
+				conn.Cancel()
+				return
+			}
+			conn.lastPing = ts.Ts
+		case <-conn.Ctx.Done():
+			return
+		}
+	}
 }
